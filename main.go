@@ -20,6 +20,7 @@ type Cell struct {
 	y int
 }
 
+const PROCESS_FREQUENCY_MILLISECONDS = 300
 const WORKER_COUNT = 4
 const WINDOW_WIDTH = 1000
 const WINDOW_HEIGHT = 1000
@@ -62,7 +63,7 @@ func getStartingCells() (map[string]*Cell, error) {
 
 func run(cellMap map[string]*Cell) {
 	cfg := pixelgl.WindowConfig{
-		Title:  "Pixel Rocks!",
+		Title:  "Game Of Life",
 		Bounds: pixel.R(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT),
 		VSync:  true,
 	}
@@ -98,16 +99,27 @@ func main() {
 func startLoop(cellMap map[string]*Cell, win *pixelgl.Window) {
 	currentMap := cellMap
 
-	for !win.Closed() {
-		fmt.Println("Loop")
+	process := make(chan bool)
 
-		currentMap = getNewCellMap(currentMap)
+	go func() {
+		for {
+			time.Sleep(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond)
+
+			process <- true
+		}
+	}()
+
+	for !win.Closed() {
+		select {
+		case <-process:
+			currentMap = getNewCellMap(currentMap)
+		default:
+			// pass
+		}
 
 		win.Clear(colornames.Black)
 		draw(currentMap, win)
 		win.Update()
-
-		time.Sleep(2 * time.Second)
 	}
 }
 
