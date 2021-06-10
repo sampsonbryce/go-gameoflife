@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -15,25 +16,41 @@ import (
 	"golang.org/x/image/colornames"
 )
 
+const PROCESS_FREQUENCY_MILLISECONDS = 50
+const WORKER_COUNT = 4
+const WINDOW_WIDTH = 1000
+const WINDOW_HEIGHT = 1000
+const CELL_SIZE = 20
+
 type Cell struct {
 	x int
 	y int
 }
 
 type Viewport struct {
-	x int
-	y int
+	offsetX int
+	offsetY int
 }
+
+func (v *Viewport) inView(x int, y int) bool {
+	positionX := x * CELL_SIZE
+	positionY := y * CELL_SIZE
+	if math.Abs(float64(positionX-v.offsetX)) > (WINDOW_WIDTH / 2) {
+		return false
+	}
+
+	if math.Abs(float64(positionY-v.offsetY)) > (WINDOW_HEIGHT / 2) {
+		return false
+	}
+
+	return true
+}
+
 type GameState struct {
 	paused   bool
 	viewport *Viewport
 	window   *pixelgl.Window
 }
-
-const PROCESS_FREQUENCY_MILLISECONDS = 50
-const WORKER_COUNT = 4
-const WINDOW_WIDTH = 1000
-const WINDOW_HEIGHT = 1000
 
 func getStartingCells() (map[string]*Cell, error) {
 	cells := make(map[string]*Cell)
@@ -85,7 +102,7 @@ func run(cellMap map[string]*Cell) {
 
 	state := &GameState{
 		paused:   true,
-		viewport: &Viewport{x: WINDOW_WIDTH, y: WINDOW_HEIGHT},
+		viewport: &Viewport{offsetX: 0, offsetY: 0},
 		window:   win,
 	}
 
@@ -112,13 +129,13 @@ func main() {
 
 func startLoop(cellMap map[string]*Cell, state *GameState) {
 	newMaps := make(chan map[string]*Cell, 1)
+	currentMap := cellMap
 
 	go startProcessLoop(cellMap, newMaps, state)
 
 	for !state.window.Closed() {
 		select {
 		case newMap := <-newMaps:
-			state.window.Clear(colornames.Black)
 			draw(newMap, state)
 		default:
 			// pass
@@ -126,6 +143,26 @@ func startLoop(cellMap map[string]*Cell, state *GameState) {
 
 		if state.window.JustPressed(pixelgl.KeyEnter) {
 			state.paused = !state.paused
+		}
+
+		if state.window.JustPressed(pixelgl.KeyUp) {
+			state.viewport.offsetY += CELL_SIZE
+			draw(currentMap, state)
+		}
+
+		if state.window.JustPressed(pixelgl.KeyDown) {
+			state.viewport.offsetY -= CELL_SIZE
+			draw(currentMap, state)
+		}
+
+		if state.window.JustPressed(pixelgl.KeyLeft) {
+			state.viewport.offsetX -= CELL_SIZE
+			draw(currentMap, state)
+		}
+
+		if state.window.JustPressed(pixelgl.KeyRight) {
+			state.viewport.offsetX += CELL_SIZE
+			draw(currentMap, state)
 		}
 
 		state.window.Update()
@@ -151,14 +188,19 @@ func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell, 
 }
 
 func draw(cellMap map[string]*Cell, state *GameState) {
-	cellSpacer := 5
-	cellSize := 10
-	widthOffset := WINDOW_WIDTH / 2
-	heightOffset := WINDOW_HEIGHT / 2
+	cellSpacer := CELL_SIZE / 2
+	widthOffset := (WINDOW_WIDTH / 2) - (state.viewport.offsetX)
+	heightOffset := (WINDOW_HEIGHT / 2) - (state.viewport.offsetY)
+
+	state.window.Clear(colornames.Black)
 
 	for _, cell := range cellMap {
-		cellCenterX := (cell.x * cellSize) + widthOffset
-		cellCenterY := (cell.y * cellSize) + heightOffset
+		if !state.viewport.inView(cell.x, cell.y) {
+			continue
+		}
+
+		cellCenterX := (cell.x * CELL_SIZE) + widthOffset
+		cellCenterY := (cell.y * CELL_SIZE) + heightOffset
 
 		imd := imdraw.New(nil)
 
@@ -170,6 +212,33 @@ func draw(cellMap map[string]*Cell, state *GameState) {
 
 		imd.Draw(state.window)
 	}
+
+	drawGrid(state)
+}
+
+func drawGrid(state *GameState) {
+	for i := CELL_SIZE / 2; i < WINDOW_WIDTH; i += CELL_SIZE {
+		imd := imdraw.New(nil)
+		imd.Color = colornames.Gray
+
+		imd.Push(pixel.V(float64(i), 0))
+		imd.Push(pixel.V(float64(i), WINDOW_HEIGHT))
+
+		imd.Line(1)
+		imd.Draw(state.window)
+	}
+
+	for i := CELL_SIZE / 2; i < WINDOW_HEIGHT; i += CELL_SIZE {
+		imd := imdraw.New(nil)
+		imd.Color = colornames.Gray
+
+		imd.Push(pixel.V(0, float64(i)))
+		imd.Push(pixel.V(WINDOW_WIDTH, float64(i)))
+
+		imd.Line(1)
+		imd.Draw(state.window)
+	}
+
 }
 
 func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
