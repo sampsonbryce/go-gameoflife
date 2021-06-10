@@ -20,6 +20,16 @@ type Cell struct {
 	y int
 }
 
+type Viewport struct {
+	x int
+	y int
+}
+type GameState struct {
+	paused   bool
+	viewport *Viewport
+	window   *pixelgl.Window
+}
+
 const PROCESS_FREQUENCY_MILLISECONDS = 50
 const WORKER_COUNT = 4
 const WINDOW_WIDTH = 1000
@@ -73,15 +83,19 @@ func run(cellMap map[string]*Cell) {
 		panic(err)
 	}
 
+	state := &GameState{
+		paused:   true,
+		viewport: &Viewport{x: WINDOW_WIDTH, y: WINDOW_HEIGHT},
+		window:   win,
+	}
+
 	// Draw initial pattern
 	if !win.Closed() {
-		draw(cellMap, win)
+		draw(cellMap, state)
 		win.Update()
 	}
 
-	time.Sleep(2 * time.Second)
-
-	startLoop(cellMap, win)
+	startLoop(cellMap, state)
 }
 
 func main() {
@@ -96,29 +110,38 @@ func main() {
 	})
 }
 
-func startLoop(cellMap map[string]*Cell, win *pixelgl.Window) {
-
+func startLoop(cellMap map[string]*Cell, state *GameState) {
 	newMaps := make(chan map[string]*Cell, 1)
 
-	go startProcessLoop(cellMap, newMaps)
+	go startProcessLoop(cellMap, newMaps, state)
 
-	for !win.Closed() {
+	for !state.window.Closed() {
 		select {
 		case newMap := <-newMaps:
-			win.Clear(colornames.Black)
-			draw(newMap, win)
+			state.window.Clear(colornames.Black)
+			draw(newMap, state)
 		default:
 			// pass
 		}
 
-		win.Update()
+		if state.window.JustPressed(pixelgl.KeyEnter) {
+			state.paused = !state.paused
+		}
+
+		state.window.Update()
 	}
 }
 
-func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell) {
+func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell, state *GameState) {
 	nextMapToProcess := startingMap
+
 	for {
 		time.Sleep(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond)
+
+		if state.paused {
+			continue
+		}
+
 		newMap := getNewCellMap(nextMapToProcess)
 
 		// Copy to prevent map write during iteration
@@ -127,7 +150,7 @@ func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell) 
 	}
 }
 
-func draw(cellMap map[string]*Cell, win *pixelgl.Window) {
+func draw(cellMap map[string]*Cell, state *GameState) {
 	cellSpacer := 5
 	cellSize := 10
 	widthOffset := WINDOW_WIDTH / 2
@@ -145,7 +168,7 @@ func draw(cellMap map[string]*Cell, win *pixelgl.Window) {
 		imd.Push(pixel.V(float64(cellCenterX-cellSpacer), float64(cellCenterY+cellSpacer)))
 		imd.Polygon(0)
 
-		imd.Draw(win)
+		imd.Draw(state.window)
 	}
 }
 
