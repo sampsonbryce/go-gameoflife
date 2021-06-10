@@ -20,7 +20,7 @@ type Cell struct {
 	y int
 }
 
-const PROCESS_FREQUENCY_MILLISECONDS = 300
+const PROCESS_FREQUENCY_MILLISECONDS = 50
 const WORKER_COUNT = 4
 const WINDOW_WIDTH = 1000
 const WINDOW_HEIGHT = 1000
@@ -97,29 +97,33 @@ func main() {
 }
 
 func startLoop(cellMap map[string]*Cell, win *pixelgl.Window) {
-	currentMap := cellMap
 
-	process := make(chan bool)
+	newMaps := make(chan map[string]*Cell, 1)
 
-	go func() {
-		for {
-			time.Sleep(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond)
-
-			process <- true
-		}
-	}()
+	go startProcessLoop(cellMap, newMaps)
 
 	for !win.Closed() {
 		select {
-		case <-process:
-			currentMap = getNewCellMap(currentMap)
+		case newMap := <-newMaps:
+			win.Clear(colornames.Black)
+			draw(newMap, win)
 		default:
 			// pass
 		}
 
-		win.Clear(colornames.Black)
-		draw(currentMap, win)
 		win.Update()
+	}
+}
+
+func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell) {
+	nextMapToProcess := startingMap
+	for {
+		time.Sleep(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond)
+		newMap := getNewCellMap(nextMapToProcess)
+
+		// Copy to prevent map write during iteration
+		nextMapToProcess = copyCellMap(newMap)
+		maps <- copyCellMap(newMap)
 	}
 }
 
@@ -147,61 +151,61 @@ func draw(cellMap map[string]*Cell, win *pixelgl.Window) {
 
 func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
 	cellCount := len(currentMap)
-	newMap := copyCellMap(currentMap)
-	if cellCount < WORKER_COUNT*5 {
+	newMap := make(map[string]*Cell)
+
+	if cellCount < WORKER_COUNT {
 		chunks := make([]*Cell, cellCount)
 		i := 0
 		for _, val := range currentMap {
 			chunks[i] = val
 			i++
 		}
+
 		processCells(currentMap, newMap, chunks)
 	} else {
 		chunks := chunkCells(currentMap, WORKER_COUNT)
+		totalChunks := len(chunks)
 
-		// TODO: channels
+		processedChunkMaps := make(chan map[string]*Cell, totalChunks)
 		for _, chunk := range chunks {
-			processCells(currentMap, newMap, chunk)
+			go processChunk(currentMap, chunk, processedChunkMaps)
+		}
+
+		completeChunks := 0
+		for completeChunks < totalChunks {
+			select {
+			case chunkMap := <-processedChunkMaps:
+				for k, v := range chunkMap {
+					newMap[k] = v
+				}
+				completeChunks++
+			case <-time.After(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond):
+				panic("Took to long to process cells")
+			}
 		}
 	}
 
 	return newMap
 }
 
-func chunkCells(cellMap map[string]*Cell, chunkCount int) [][]*Cell {
-	cellCount := len(cellMap)
-	chunkSize := (chunkCount / cellCount) + 1 // Add one to allow for remainder
-	chunks := make([][]*Cell, chunkCount)
+func processChunk(currentMap map[string]*Cell, currentChunk []*Cell, processedChunk chan map[string]*Cell) {
+	chunkMap := make(map[string]*Cell)
 
-	chunkIndices := make([]int, chunkCount)
-	for i := range chunkIndices {
-		chunkIndices[i] = 1
-	}
+	processCells(currentMap, chunkMap, currentChunk)
 
-	for i := 0; i < chunkCount; i++ {
-		chunks[i] = make([]*Cell, chunkSize)
-	}
-
-	currentChunk := 0
-	for _, val := range cellMap {
-		chunk := chunks[currentChunk]
-		chunkIndex := chunkIndices[currentChunk]
-
-		chunk[chunkIndex] = val
-
-		chunkIndices[currentChunk]++
-		currentChunk++
-		currentChunk %= chunkCount
-	}
-
-	return chunks
+	processedChunk <- chunkMap
 }
 
 func processCells(currentMap map[string]*Cell, newMap map[string]*Cell, cells []*Cell) {
 	for _, cell := range cells {
-		if shouldKillCell(currentMap, cell.x, cell.y) {
+		// Due to round robin during chunking, some slice indexes might be 0
+		if cell == nil {
+			continue
+		}
+
+		if !shouldKillCell(currentMap, cell.x, cell.y) {
 			key := getCellKey(cell.x, cell.y)
-			delete(newMap, key)
+			newMap[key] = cell
 		}
 
 		reviveCells(currentMap, newMap, cell)
@@ -220,6 +224,7 @@ func reviveCells(currentMap map[string]*Cell, newMap map[string]*Cell, cell *Cel
 			currentY := cell.y + j
 
 			key := getCellKey(currentX, currentY)
+
 			// Already was alive
 			if _, ok := currentMap[key]; ok {
 				continue
@@ -280,6 +285,35 @@ func getCellNeighborCount(cellMap map[string]*Cell, x int, y int) int {
 	return count
 }
 
+func chunkCells(cellMap map[string]*Cell, chunkCount int) [][]*Cell {
+	cellCount := len(cellMap)
+	chunkSize := (cellCount / chunkCount) + 1 // Add one to allow for remainder
+	chunks := make([][]*Cell, chunkCount)
+
+	chunkIndices := make([]int, chunkCount)
+	for i := range chunkIndices {
+		chunkIndices[i] = 0
+	}
+
+	for i := 0; i < chunkCount; i++ {
+		chunks[i] = make([]*Cell, chunkSize)
+	}
+
+	currentChunk := 0
+	for _, val := range cellMap {
+		chunk := chunks[currentChunk]
+		chunkIndex := chunkIndices[currentChunk]
+
+		chunk[chunkIndex] = val
+
+		chunkIndices[currentChunk]++
+		currentChunk++
+		currentChunk %= chunkCount
+	}
+
+	return chunks
+}
+
 func getCellKey(x int, y int) string {
 	key := fmt.Sprintf("%d,%d", x, y)
 	return key
@@ -299,4 +333,19 @@ func printCellMap(cellMap map[string]*Cell) {
 	for k, v := range cellMap {
 		fmt.Printf("%s = %v\n", k, v)
 	}
+}
+
+func isMapEqual(map1 map[string]*Cell, map2 map[string]*Cell) bool {
+	for k, v := range map1 {
+		if val, ok := map2[k]; ok {
+			if val != v {
+				return false
+			}
+		} else {
+			// Missing key
+			return false
+		}
+	}
+
+	return true
 }
