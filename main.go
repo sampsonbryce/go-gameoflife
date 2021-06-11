@@ -129,7 +129,7 @@ func main() {
 
 func startLoop(cellMap map[string]*Cell, state *GameState) {
 	newMaps := make(chan map[string]*Cell, 1)
-	currentMap := cellMap
+	currentMap := cellMap // Should only be used for drawing. Don't write
 
 	go startProcessLoop(cellMap, newMaps, state)
 
@@ -137,6 +137,7 @@ func startLoop(cellMap map[string]*Cell, state *GameState) {
 		select {
 		case newMap := <-newMaps:
 			draw(newMap, state)
+			currentMap = newMap
 		default:
 			// no new map
 		}
