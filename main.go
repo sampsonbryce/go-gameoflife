@@ -138,7 +138,7 @@ func startLoop(cellMap map[string]*Cell, state *GameState) {
 		case newMap := <-newMaps:
 			draw(newMap, state)
 		default:
-			// pass
+			// no new map
 		}
 
 		if state.window.JustPressed(pixelgl.KeyEnter) {
@@ -246,14 +246,14 @@ func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
 	newMap := make(map[string]*Cell)
 
 	if cellCount < WORKER_COUNT {
-		chunks := make([]*Cell, cellCount)
+		chunk := make([]*Cell, cellCount)
 		i := 0
 		for _, val := range currentMap {
-			chunks[i] = val
+			chunk[i] = val
 			i++
 		}
 
-		processCells(currentMap, newMap, chunks)
+		processCells(currentMap, newMap, chunk)
 	} else {
 		chunks := chunkCells(currentMap, WORKER_COUNT)
 		totalChunks := len(chunks)
