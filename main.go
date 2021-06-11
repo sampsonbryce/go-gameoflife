@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
+	"image/color"
 	"log"
 	"math"
 	"os"
@@ -28,13 +30,13 @@ type Cell struct {
 }
 
 type Viewport struct {
-	offsetX int
-	offsetY int
+	offsetX float64
+	offsetY float64
 }
 
-func (v *Viewport) inView(x int, y int) bool {
-	positionX := x * CELL_SIZE
-	positionY := y * CELL_SIZE
+func (v *Viewport) inView(state *GameState, x int, y int) bool {
+	positionX := float64(x) * state.cellSize
+	positionY := float64(y) * state.cellSize
 	if math.Abs(float64(positionX-v.offsetX)) > (WINDOW_WIDTH / 2) {
 		return false
 	}
@@ -50,9 +52,64 @@ type GameState struct {
 	paused   bool
 	viewport *Viewport
 	window   *pixelgl.Window
+	cellSize float64
+}
+
+func createGameState(window *pixelgl.Window) *GameState {
+	return &GameState{
+		paused:   true,
+		viewport: &Viewport{offsetX: 0, offsetY: 0},
+		window:   window,
+		cellSize: CELL_SIZE,
+	}
 }
 
 func getStartingCells() (map[string]*Cell, error) {
+	isPatternInput := flag.Bool("pattern", false, "input is a pattern from gameoflife wiki")
+
+	flag.Parse()
+
+	if *isPatternInput {
+		return readPattern()
+	} else {
+		return readCoordinates()
+	}
+}
+
+func readPattern() (map[string]*Cell, error) {
+	cells := make(map[string]*Cell)
+
+	line := 0
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		text := scanner.Text()
+
+		if strings.HasPrefix(text, "!") { // Comment
+			continue
+		}
+
+		i := 0
+		for _, char := range text {
+			if string(char) == "O" {
+				key := getCellKey(i, line)
+				cells[key] = &Cell{x: i, y: line}
+			}
+
+			i++
+		}
+
+		line -= 1
+	}
+
+	if err := scanner.Err(); err != nil {
+		return cells, err
+	}
+
+	return cells, nil
+}
+
+func readCoordinates() (map[string]*Cell, error) {
+
 	cells := make(map[string]*Cell)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -82,7 +139,7 @@ func getStartingCells() (map[string]*Cell, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading standard input:", err)
+		return cells, err
 	}
 
 	return cells, nil
@@ -100,11 +157,7 @@ func run(cellMap map[string]*Cell) {
 		panic(err)
 	}
 
-	state := &GameState{
-		paused:   true,
-		viewport: &Viewport{offsetX: 0, offsetY: 0},
-		window:   win,
-	}
+	state := createGameState(win)
 
 	// Draw initial pattern
 	if !win.Closed() {
@@ -147,23 +200,39 @@ func startLoop(cellMap map[string]*Cell, state *GameState) {
 		}
 
 		if state.window.JustPressed(pixelgl.KeyUp) {
-			state.viewport.offsetY += CELL_SIZE
+			state.viewport.offsetY += math.Max(state.cellSize, 20)
 			draw(currentMap, state)
 		}
 
 		if state.window.JustPressed(pixelgl.KeyDown) {
-			state.viewport.offsetY -= CELL_SIZE
+			state.viewport.offsetY -= math.Max(state.cellSize, 20)
 			draw(currentMap, state)
 		}
 
 		if state.window.JustPressed(pixelgl.KeyLeft) {
-			state.viewport.offsetX -= CELL_SIZE
+			state.viewport.offsetX -= math.Max(state.cellSize, 20)
 			draw(currentMap, state)
 		}
 
 		if state.window.JustPressed(pixelgl.KeyRight) {
-			state.viewport.offsetX += CELL_SIZE
+			state.viewport.offsetX += math.Max(state.cellSize, 20)
 			draw(currentMap, state)
+		}
+
+		// Zoom in
+		if state.window.JustPressed(pixelgl.KeyI) {
+			if state.cellSize < 50 {
+				state.cellSize = state.cellSize * 2
+				draw(currentMap, state)
+			}
+		}
+
+		// Zoom out
+		if state.window.JustPressed(pixelgl.KeyO) {
+			if state.cellSize > 2 {
+				state.cellSize = state.cellSize / 2
+				draw(currentMap, state)
+			}
 		}
 
 		state.window.Update()
@@ -189,19 +258,19 @@ func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell, 
 }
 
 func draw(cellMap map[string]*Cell, state *GameState) {
-	cellSpacer := CELL_SIZE / 2
+	cellSpacer := state.cellSize / 2
 	widthOffset := (WINDOW_WIDTH / 2) - (state.viewport.offsetX)
 	heightOffset := (WINDOW_HEIGHT / 2) - (state.viewport.offsetY)
 
 	state.window.Clear(colornames.Black)
 
 	for _, cell := range cellMap {
-		if !state.viewport.inView(cell.x, cell.y) {
+		if !state.viewport.inView(state, cell.x, cell.y) {
 			continue
 		}
 
-		cellCenterX := (cell.x * CELL_SIZE) + widthOffset
-		cellCenterY := (cell.y * CELL_SIZE) + heightOffset
+		cellCenterX := (float64(cell.x) * state.cellSize) + widthOffset
+		cellCenterY := (float64(cell.y) * state.cellSize) + heightOffset
 
 		imd := imdraw.New(nil)
 
@@ -218,9 +287,9 @@ func draw(cellMap map[string]*Cell, state *GameState) {
 }
 
 func drawGrid(state *GameState) {
-	for i := CELL_SIZE / 2; i < WINDOW_WIDTH; i += CELL_SIZE {
+	for i := state.cellSize / 2; i < WINDOW_WIDTH; i += state.cellSize {
 		imd := imdraw.New(nil)
-		imd.Color = colornames.Gray
+		imd.Color = color.RGBA{0x30, 0x30, 0x30, 0xFF} // rgb(48, 48, 48)
 
 		imd.Push(pixel.V(float64(i), 0))
 		imd.Push(pixel.V(float64(i), WINDOW_HEIGHT))
@@ -229,7 +298,7 @@ func drawGrid(state *GameState) {
 		imd.Draw(state.window)
 	}
 
-	for i := CELL_SIZE / 2; i < WINDOW_HEIGHT; i += CELL_SIZE {
+	for i := state.cellSize / 2; i < WINDOW_HEIGHT; i += state.cellSize {
 		imd := imdraw.New(nil)
 		imd.Color = colornames.Gray
 
@@ -239,7 +308,6 @@ func drawGrid(state *GameState) {
 		imd.Line(1)
 		imd.Draw(state.window)
 	}
-
 }
 
 func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
