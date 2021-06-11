@@ -53,6 +53,8 @@ type GameState struct {
 	viewport *Viewport
 	window   *pixelgl.Window
 	cellSize float64
+	gridDraw *imdraw.IMDraw
+	cellDraw *imdraw.IMDraw
 }
 
 func createGameState(window *pixelgl.Window) *GameState {
@@ -61,6 +63,8 @@ func createGameState(window *pixelgl.Window) *GameState {
 		viewport: &Viewport{offsetX: 0, offsetY: 0},
 		window:   window,
 		cellSize: CELL_SIZE,
+		gridDraw: imdraw.New(nil),
+		cellDraw: imdraw.New(nil),
 	}
 }
 
@@ -249,7 +253,14 @@ func startProcessLoop(startingMap map[string]*Cell, maps chan map[string]*Cell, 
 			continue
 		}
 
-		newMap := getNewCellMap(nextMapToProcess)
+		if nextMapToProcess == nil {
+			continue
+		}
+
+		toProcess := nextMapToProcess
+		nextMapToProcess = nil // Prevents double processing
+
+		newMap := getNewCellMap(toProcess)
 
 		// Copy to prevent map write during iteration
 		nextMapToProcess = copyCellMap(newMap)
@@ -264,6 +275,9 @@ func draw(cellMap map[string]*Cell, state *GameState) {
 
 	state.window.Clear(colornames.Black)
 
+	imd := state.cellDraw
+	imd.Clear()
+
 	for _, cell := range cellMap {
 		if !state.viewport.inView(state, cell.x, cell.y) {
 			continue
@@ -272,42 +286,42 @@ func draw(cellMap map[string]*Cell, state *GameState) {
 		cellCenterX := (float64(cell.x) * state.cellSize) + widthOffset
 		cellCenterY := (float64(cell.y) * state.cellSize) + heightOffset
 
-		imd := imdraw.New(nil)
-
 		imd.Push(pixel.V(float64(cellCenterX-cellSpacer), float64(cellCenterY-cellSpacer)))
 		imd.Push(pixel.V(float64(cellCenterX+cellSpacer), float64(cellCenterY-cellSpacer)))
 		imd.Push(pixel.V(float64(cellCenterX+cellSpacer), float64(cellCenterY+cellSpacer)))
 		imd.Push(pixel.V(float64(cellCenterX-cellSpacer), float64(cellCenterY+cellSpacer)))
 		imd.Polygon(0)
 
-		imd.Draw(state.window)
 	}
+
+	imd.Draw(state.window)
 
 	drawGrid(state)
 }
 
 func drawGrid(state *GameState) {
+	imd := state.gridDraw
+	imd.Clear()
+
 	for i := state.cellSize / 2; i < WINDOW_WIDTH; i += state.cellSize {
-		imd := imdraw.New(nil)
 		imd.Color = color.RGBA{0x30, 0x30, 0x30, 0xFF} // rgb(48, 48, 48)
 
 		imd.Push(pixel.V(float64(i), 0))
 		imd.Push(pixel.V(float64(i), WINDOW_HEIGHT))
 
 		imd.Line(1)
-		imd.Draw(state.window)
 	}
 
 	for i := state.cellSize / 2; i < WINDOW_HEIGHT; i += state.cellSize {
-		imd := imdraw.New(nil)
 		imd.Color = colornames.Gray
 
 		imd.Push(pixel.V(0, float64(i)))
 		imd.Push(pixel.V(WINDOW_WIDTH, float64(i)))
 
 		imd.Line(1)
-		imd.Draw(state.window)
 	}
+
+	imd.Draw(state.window)
 }
 
 func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
@@ -334,15 +348,11 @@ func getNewCellMap(currentMap map[string]*Cell) map[string]*Cell {
 
 		completeChunks := 0
 		for completeChunks < totalChunks {
-			select {
-			case chunkMap := <-processedChunkMaps:
-				for k, v := range chunkMap {
-					newMap[k] = v
-				}
-				completeChunks++
-			case <-time.After(PROCESS_FREQUENCY_MILLISECONDS * time.Millisecond):
-				panic("Took to long to process cells")
+			chunkMap := <-processedChunkMaps
+			for k, v := range chunkMap {
+				newMap[k] = v
 			}
+			completeChunks++
 		}
 	}
 
